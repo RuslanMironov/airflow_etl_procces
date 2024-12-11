@@ -1,0 +1,87 @@
+services:
+  webserver:
+    image: apache/airflow:latest
+    command: webserver
+    entrypoint: ['/opt/airflow/handlers/entrypoint.sh']
+    depends_on:
+      - postgres
+    environment:
+      - LOAD_EX=n
+      - EXECUTOR=Sequential
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/shared_db?options=-csearch_path=airflow
+      - AIRFLOW_WEBSERVER_SECRET_KEY=ce892db83b34e8d169357d8be261637d
+      - AIRFLOW__WEBSERVER__WEB_SERVER_MASTER_TIMEOUT=300
+      - AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT=300
+      - AIRFLOW__WEBSERVER__WORKER_REFRESH_BATCH_SIZE=0
+      - AIRFLOW__WEBSERVER__WORKER_REFRESH_INTERVAL=0
+      
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./handlers/entrypoint.sh:/opt/airflow/handlers/entrypoint.sh
+      - ./requirements.txt:/opt/airflow/requirements.txt
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ['CMD-SHELL', "[ -f /opt/airflow/airflow-webserver.pid ]"]
+      interval: 30s
+      timeout: 240s
+      retries: 3
+    networks:
+      - confluent
+
+  scheduler:
+    image: apache/airflow:latest
+    depends_on:
+      webserver:
+        condition: service_healthy
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./handlers/entrypoint.sh:/opt/airflow/handlers/entrypoint.sh
+      - ./requirements.txt:/opt/airflow/requirements.txt
+    environment:
+      - LOAD_EX=n
+      - EXECUTOR=Sequential
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow@postgres:5432/shared_db?options=-csearch_path=airflow
+      - AIRFLOW_WEBSERVER_SECRET_KEY=ce892db83b34e8d169357d8be261637d
+    command: bash -c "pip install -r ./requirements.txt && airflow db upgrade && airflow scheduler"
+    networks:
+      - confluent
+
+  postgres:
+    image: postgres:14.0
+    ports:
+      - 5432:5432
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=shared_db
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      - confluent
+    volumes:
+      - ./init-scripts:/docker-entrypoint-initdb.d
+  superset:
+    build:
+      context: ./superset
+      dockerfile: Dockerfile
+    container_name: superset
+    restart: unless-stopped
+    environment:
+      - ADMIN_USERNAME=admin
+      - ADMIN_EMAIL=admin@superset.com
+      - ADMIN_PASSWORD=admin
+      - SQLALCHEMY_DATABASE_URI=postgresql+psycopg2://airflow:airflow@postgres:5432/shared_db?options=-csearch_path=superset
+    ports:
+      - '8088:8088'
+    networks:
+      - confluent
+networks:
+  confluent:
+    driver: bridge
